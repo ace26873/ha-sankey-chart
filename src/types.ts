@@ -49,7 +49,6 @@ export interface SankeyChartConfig extends LovelaceCardConfig {
   unit_prefix?: '' | 'auto' | keyof typeof UNIT_PREFIXES;
   round?: number;
   height?: number;
-  wide?: boolean;
   layout?: 'auto' | 'vertical' | 'horizontal';
   show_icons?: boolean;
   show_names?: boolean;
@@ -219,7 +218,6 @@ export interface Box {
   color: string;
   size: number;
   top: number;
-  extraSpacers?: number;
   connections: {
     parents: Connection[];
   };
@@ -233,6 +231,7 @@ export interface SectionState {
   statePerPixel: number;
   config: Section;
   size: number;
+  offset: number;
 }
 
 export interface ConnectionState {
