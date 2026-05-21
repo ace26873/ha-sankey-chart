@@ -414,6 +414,10 @@ Currently this chart just shows historical data based on a energy-date-selection
 
 **A:** By default entities are displayed in the order in which they appear in the config. You can rearrange them in the YAML or use the sorting options.
 
+**Q: Does the order of `links` matter, and how should I order them?**
+
+**A:** Yes — but it matters _per shared source and per shared target_, not globally. The chart walks sections left-to-right, then nodes in `nodes[]` order, then each node's outgoing links in the order you wrote them. Each link subtracts from the remaining state of both its source and its target, so the first link out of a given source gets first claim on that source's value, and the first link into a given target gets first claim on that target's value. `remaining_parent_state` / `remaining_child_state` nodes absorb whatever is left after the earlier links are accounted for. Rule of thumb: for each source, list its outgoing links from highest priority to lowest, with any `remaining_*` sink last. If reordering to fix one flow keeps breaking another, the conflict usually isn't solvable by ordering alone — split the shared node or set the link's `value` (entity id) so the flow isn't inferred from "remaining."
+
 **Q: The font size is too small sometimes**
 
 **A:** The font size is determined by the available space, so you can increase the minimum font size by increasing `min_box_size` and/or `min_box_distance`
