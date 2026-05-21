@@ -25,11 +25,11 @@ Install through [HACS](https://hacs.xyz/)
 | nodes             | list    |                     | List of entities/nodes to display. See [nodes object](#nodes-object). Required unless using autoconfig.
 | links             | list    |                     | Connections between nodes. See [links object](#links-object)
 | sections          | list    |                     | Section-level configuration (sorting, min_width). See [sections object](#sections-object)
-| layout            | string  | auto                | Valid options are: 'horizontal' - flow left to right, 'vertical' - flow top to bottom & 'auto' - determine based on available space (based on the section->`min_witdh` option, which defaults to 150)
-| energy_date_selection | boolean | false           | Integrate with the Energy Dashboard. Filters data based on the [energy-date-selection](https://www.home-assistant.io/dashboards/energy/) card. Use this only for accumulated data sensors (energy/water/gas) and with a `type:energy-date-selection` card. You still need to specify all your entities as HA doesn't know exactly how to connect them but you can use the general kWh entities that you have in the energy dashboard. In the future we may use areas to auto configure the chart. Not compatible with `time_period`
+| layout            | string  | auto                | Valid options are: 'horizontal' - flow left to right, 'vertical' - flow top to bottom & 'auto' - flips to vertical when the available width is smaller than the sum of all sections' `min_width` (default 150 each)
+| energy_date_selection | boolean | false           | Integrate with the Energy Dashboard. Filters data based on a sibling [energy-date-selection](https://www.home-assistant.io/dashboards/energy/) card. Use only for accumulated sensors (energy/water/gas). You still need to declare your entities and links — the card just uses the date range from the sibling card. Not compatible with `time_period`. For automatic node/link generation, see [autoconfig](#autoconfig).
 | energy_collection_key | string |                   | Key of the energy collection to bind to. Auto-detected by default. Set this if you have multiple energy dashboards and the chart binds to the wrong one. The key follows the pattern `_energy_<dashboard_url>`, e.g. `_energy_energy-dashboard`
 | title             | string  |                     | Optional header title for the card
-| unit_prefix       | string  |                     | Metric prefix for the unit of measurment. See <https://en.wikipedia.org/wiki/Unit_prefix> . Supported values are m, k, M, G, T, and 'auto'. When 'auto' is used, the appropriate prefix is chosen automatically for each value based on its magnitude (m for values <1, k for values >=1000, etc.)
+| unit_prefix       | string  |                     | Metric prefix for the unit of measurement. Supported values are m, k, M, G, T, and 'auto'. With 'auto', the appropriate prefix is chosen per value based on its magnitude (m for values <1, k for ≥1000, M for ≥1,000,000, etc.). See <https://en.wikipedia.org/wiki/Unit_prefix>.
 | round             | number  | 0                   | Round the value to at most N decimal places. May not apply to near zero values, see issue [#29](https://github.com/MindFreeze/ha-sankey-chart/issues/29)
 | height            | number  | 200                 | The height of the card in pixels. Only matters while in horizontal layout. Vertical layout height is dynamic based on content
 | show_icons        | boolean | false               | Display entity icons
@@ -40,14 +40,14 @@ Install through [HACS](https://hacs.xyz/)
 | min_box_distance  | number  | 5                   | Minimum space between entity boxes
 | min_state         | number  | >0                  | Any entity below this value will not be displayed. Only positive numbers above 0 are allowed. The default is to show everything above 0.
 | throttle          | number  |                     | Minimum time in ms between updates/rerenders
-| static_scale      | number  |                     | State value corresponding to the maximum size (height for horizontal layout and width in vertical) of the card. For example, if this is set to 1000, then a box with state 500 will take up half of its section. If some section exceeds the value of `static_scale`, the card will dynamically rescale overriding this option. See (#153)
+| static_scale      | number  |                     | State value corresponding to the maximum size (height for horizontal layout and width in vertical) of the card. For example, if this is set to 1000, then a box with state 500 will take up half of its section. If some section exceeds the value of `static_scale`, the card will dynamically rescale overriding this option. See [#153](https://github.com/MindFreeze/ha-sankey-chart/issues/153).
 | convert_units_to  | string  |                     | If entities are electricity (kWh) or gas (ft³) usage, convert them to energy (MJ), cost (monetary) or carbon (gCO2). For cost, you must also specify `electricity_price` and/or `gas_price`, as well as the `monetary_unit` of the price(s). For gCO2, all kWh values will be multiplied by the varying grid CO2 intensity, as with the Energy Dashboard.
-| co2_intensity_entity |string | sensor. co2_signal_co2_intensity | Entity providing carbon intensity of electricity (gCO2eq/kWh). If you have solar or storage, you may wish to create a template sensor to convert grid CO2 intensity to consumption CO2 intensity.
+| co2_intensity_entity |string | sensor.co2_signal_co2_intensity | Entity providing carbon intensity of electricity (gCO2eq/kWh). If you have solar or storage, you may wish to create a template sensor to convert grid CO2 intensity to consumption CO2 intensity.
 | gas_co2_intensity | number  | 66.6 g/ft³ or 2352 g/m³ | Carbon intensity of gas, e.g. in gCO2eq/ft³. Default value depends on locale; units must match those of gas entities.
 | electricity_price | number  |                     | Unit price of electricity, e.g. in USD/kWh. Automatic conversion does not support varying electricity prices like the Energy Dashboard does.
 | gas_price         | number  |                     | Unit price of gas, e.g. in USD/ft³.
 | monetary_unit     | string  |                     | Currency of the gas or electricity price, e.g. 'USD'
-| sort_by           | string  |                     | Sort the entities. Valid options are: 'state'. If your values change often, you may want to use the `throttle` option to limit update frequency
+| sort_by           | string  |                     | Sort the entities. Valid options are: 'state' (sort by current state) and 'none' (no sorting; useful in `sections[].sort_by` to override a top-level value). If your values change often, you may want to use the `throttle` option to limit update frequency
 | sort_dir          | string  | desc                | Sorting direction. Valid options are: 'asc' for smallest first & 'desc' for biggest first
 | time_period_from | string  |                      | Start of custom time period (e.g., "now-1d", "now/d"). Not compatible with `energy_date_selection`. See [Time period](#time-period)
 | time_period_to   | string  | now                  | End of custom time period. Not compatible with `energy_date_selection`. See [Time period](#time-period)
@@ -122,9 +122,9 @@ nodes:
         from: 30  # red when >= 30
       orange:
         from: 20
-        to: 30    # orange when >= 20 and < 30
+        to: 30    # orange when >= 20 and <= 30
       green:
-        to: 20    # green when < 20
+        to: 20    # green when <= 20
 ```
 
 ### Sections object
@@ -141,7 +141,7 @@ nodes:
 | Name                 | Type    | Requirement  | Default             | Description                                 |
 | -------------------- | ------- | ------------ | ------------------- | ------------------------------------------- |
 | should_be            | string  | **Required** |                     | Valid options are 'equal', 'equal_or_less', 'equal_or_more'
-| reconcile_to         | string  | **Required** |                     | Which value to display in case of inconsistency. Valid options are 'min', 'max', 'mean', 'latest
+| reconcile_to         | string  | **Required** |                     | Which value to display in case of inconsistency. Valid options are 'min', 'max', 'mean', 'latest'
 
 ### Entity types
 
@@ -164,7 +164,7 @@ links:
     target: sensor.child
 ```
 
-- `remaining_parent_state` - Used for representing the unaccounted state from this entity's parent. Formerly known as the `remaining` configuration. Useful for displaying the unmeasured state as "Other". See issue [#2](https://github.com/MindFreeze/ha-sankey-chart/issues/2) & [#28](https://github.com/MindFreeze/ha-sankey-chart/issues/28). Only 1 is allowed per group. If you add 2, the state will not be split between them but an error will appear. Obviously it must be listed as a target in some link. Example:
+- `remaining_parent_state` - Used for representing the unaccounted state from this entity's parent. Useful for displaying the unmeasured state as "Other". See issue [#2](https://github.com/MindFreeze/ha-sankey-chart/issues/2) & [#28](https://github.com/MindFreeze/ha-sankey-chart/issues/28). Only 1 is allowed per group. If you add 2, the state will not be split between them but an error will appear. Obviously it must be listed as a target in some link. Example:
 
 ```yaml
 nodes:
@@ -376,9 +376,7 @@ You can find more examples and help in the HA forum <https://community.home-assi
 
 ## Energy Dashboard
 
-This card supports partial Energy dashboard integration. You still need to specify the entities and connections for now. See `energy_date_selection` option.
-
-Currently this chart just shows historical data based on a energy-date-selection card. It doesn't know/care if your entities are in the default energy dashboard.
+For automatic configuration from your Energy Dashboard setup, see [autoconfig](#autoconfig). To bind the chart's date range to an `energy-date-selection` card while keeping a manual config, see the [`energy_date_selection`](#options) option.
 
 ## FAQ
 
@@ -408,7 +406,7 @@ Currently this chart just shows historical data based on a energy-date-selection
 
 **Q: Can you add feature X, so I don't have to create template entities in HA?**
 
-**A:** Most probably no. There is nothing wrong with template entities and they should be the prefered approach instead of duplicating HA functionality in every card. I do make exceptions for often required features like `remaining_parent_state` but prefer to rely on HA functionality whenever I can.
+**A:** Most probably no. There is nothing wrong with template entities and they should be the preferred approach instead of duplicating HA functionality in every card. I do make exceptions for often required features like `remaining_parent_state` but prefer to rely on HA functionality whenever I can.
 
 **Q: My entities are not rendered where I expected**
 
