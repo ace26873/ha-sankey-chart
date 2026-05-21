@@ -3,7 +3,8 @@ import { LitElement, html, TemplateResult } from 'lit';
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { customElement, property, state } from 'lit/decorators';
 
-import type { Config, SankeyChartConfig, SectionConfig } from './types';
+import type { CarbonNodeType, Config, Node, SankeyChartConfig, SectionConfig } from './types';
+import { DEFAULT_CONFIG, isCarbonNodeType } from './types';
 import { version } from '../package.json';
 import { localize } from './localize/localize';
 import { autoRouteCrossGapLinks, convertNodesToSections, normalizeConfig, renderError } from './utils';
@@ -12,17 +13,20 @@ import './chart';
 import './print-config';
 import { HassEntities } from 'home-assistant-js-websocket';
 import {
+  CarbonNodeDef,
   Conversions,
   DeviceConsumptionEnergyPreference,
   EnergyCollection,
   EnergyData,
   EnergySource,
+  getCarbonNodeStates,
   getEnergyDataCollection,
   getEnergySourceColor,
   getStatistics,
   getEnergyPreferences,
   EnergyPreferences,
   isRateMode,
+  resolveCarbonSources,
   sourceTypesForMode,
 } from './energy';
 import { until } from 'lit/directives/until';
@@ -58,6 +62,8 @@ const NO_AREA = 'no_area';
 // Suffix for synthetic export/charge nodes in rate-mode autoconfig (mirrors
 // the existing `__passthrough_N__auto` convention from autoRouteCrossGapLinks).
 const AUTO_TO_SUFFIX = '__to_auto';
+const AUTO_LOW_CARBON_SUFFIX = '__low_carbon_auto';
+const AUTO_HIGH_CARBON_SUFFIX = '__high_carbon_auto';
 
 type DeviceNode = { id: string; name?: string; parent?: string; color?: string };
 
@@ -80,8 +86,17 @@ class SankeyChart extends SubscribeMixin(LitElement) {
   @state() private error?: unknown;
   @state() private forceUpdateTs?: number;
 
-  private async _fetchStats(range: Pick<EnergyData, 'start' | 'end'>): Promise<void> {
-    if (!this.entityIds.length) return;
+  private _collectCarbonNodes(): { node: Node & { type: CarbonNodeType }; sources: string[] }[] {
+    const isCarbonNode = (n: Node): n is Node & { type: CarbonNodeType } => isCarbonNodeType(n.type);
+    return this.config.nodes.filter(isCarbonNode).map(node => ({
+      node,
+      sources: resolveCarbonSources(node, this.hass).filter(id => this.hass.states[id]),
+    }));
+  }
+
+  private async _fetchStats(range: Pick<EnergyData, 'start' | 'end' | 'co2SignalEntity'>): Promise<void> {
+    const carbonNodes = this._collectCarbonNodes();
+    if (!this.entityIds.length && !carbonNodes.length) return;
     if (isRateMode(this.config.autoconfig?.mode || 'energy')) return;
     const conversions: Conversions = {
       convert_units_to: this.config.convert_units_to!,
@@ -90,11 +105,61 @@ class SankeyChart extends SubscribeMixin(LitElement) {
       electricity_price: this.config.electricity_price,
       gas_price: this.config.gas_price,
     };
-    const stats = await getStatistics(this.hass, range, this.entityIds, conversions);
+    const carbonDefs: CarbonNodeDef[] = carbonNodes.map(({ node, sources }) => ({
+      nodeId: node.id,
+      type: node.type,
+      sourceEntityIds: sources,
+    }));
+    // For carbon nodes, prefer the entity HA's own energy dashboard uses
+    // (auto-detected by HA from the energy prefs, unit "%"). The chart's
+    // `co2_intensity_entity` is a different conceptual entity (gCO2eq/kWh for
+    // the gCO2 conversion path) — only fall back to it if it was explicitly
+    // overridden away from the default.
+    const co2DefaultEntity = (DEFAULT_CONFIG as { co2_intensity_entity?: string }).co2_intensity_entity;
+    const explicitCo2 =
+      this.config.co2_intensity_entity && this.config.co2_intensity_entity !== co2DefaultEntity
+        ? this.config.co2_intensity_entity
+        : '';
+    const co2Entity = range.co2SignalEntity || explicitCo2 || '';
+    const [stats, carbonStates] = await Promise.all([
+      this.entityIds.length
+        ? getStatistics(this.hass, range, this.entityIds, conversions)
+        : Promise.resolve<Record<string, number>>({}),
+      carbonDefs.length
+        ? getCarbonNodeStates(this.hass, range, carbonDefs, co2Entity)
+        : Promise.resolve<Record<string, number>>({}),
+    ]);
     const states: HassEntities = {};
     Object.keys(stats).forEach(id => {
       if (this.hass.states[id]) {
         states[id] = { ...this.hass.states[id], state: String(stats[id]) };
+      }
+    });
+    carbonNodes.forEach(({ node, sources }) => {
+      if (!(node.id in carbonStates)) return;
+      const sourceEntity = sources.length ? this.hass.states[sources[0]] : undefined;
+      const baseAttributes = sourceEntity?.attributes ?? {};
+      const attributes = {
+        ...baseAttributes,
+        unit_of_measurement: baseAttributes.unit_of_measurement || '',
+        friendly_name: node.name || node.id,
+      };
+      if (sourceEntity) {
+        states[node.id] = {
+          ...sourceEntity,
+          entity_id: node.id,
+          state: String(carbonStates[node.id]),
+          attributes,
+        };
+      } else {
+        states[node.id] = {
+          entity_id: node.id,
+          state: String(carbonStates[node.id]),
+          last_changed: '',
+          last_updated: '',
+          context: { id: '', user_id: null, parent_id: null },
+          attributes,
+        };
       }
     });
     this.states = states;
@@ -149,7 +214,11 @@ class SankeyChart extends SubscribeMixin(LitElement) {
                 return;
               }
             }
-            await this._fetchStats(data);
+            try {
+              await this._fetchStats(data);
+            } catch (err: any) {
+              this.error = err instanceof Error ? err : new Error(err?.message || String(err));
+            }
             this.forceUpdateTs = Date.now();
           });
         }),
@@ -225,6 +294,7 @@ class SankeyChart extends SubscribeMixin(LitElement) {
     const rateMode = isRateMode(mode);
     const validTypes = sourceTypesForMode(mode);
     const netFlows = this.config.autoconfig?.net_flows !== false;
+    const carbonSplit = this.config.autoconfig?.carbon_split === true && mode === 'energy';
 
     const fromEntity = (s: EnergySource): string | undefined =>
       rateMode ? s.stat_rate : s.stat_energy_from;
@@ -303,6 +373,31 @@ class SankeyChart extends SubscribeMixin(LitElement) {
 
     sources.forEach(source => {
       const id = fromEntity(source)!;
+      if (carbonSplit && source.type === 'grid') {
+        // Replace the grid source node with a fossil/non-fossil split using
+        // the same section, so there's no extra column added to the chart.
+        const lowId = `${id}${AUTO_LOW_CARBON_SUFFIX}`;
+        const highId = `${id}${AUTO_HIGH_CARBON_SUFFIX}`;
+        nodes.push({
+          id: lowId,
+          entity_id: id,
+          section: currentSection,
+          type: 'low_carbon_energy',
+          name: 'Low-carbon Grid',
+          color: 'var(--energy-non-fossil-color)',
+        });
+        nodes.push({
+          id: highId,
+          entity_id: id,
+          section: currentSection,
+          type: 'high_carbon_energy',
+          name: 'High-carbon Grid',
+          color: getEnergySourceColor(source.type),
+        });
+        links.push({ source: lowId, target: TOTAL_NODE_ID });
+        links.push({ source: highId, target: TOTAL_NODE_ID });
+        return;
+      }
       const exportId = toEntity(source);
       const subtract = (source.type === 'grid' || source.type === 'battery') && !netFlows
         ? undefined
@@ -359,6 +454,9 @@ class SankeyChart extends SubscribeMixin(LitElement) {
         sources.forEach(s => {
           const sId = fromEntity(s);
           if (!sId) return;
+          // With carbon_split, there's no grid source node — skip the link
+          // rather than producing a dangling source.
+          if (carbonSplit && s.type === 'grid') return;
           links.push({ source: sId, target: exportEntity });
         });
       };
